@@ -1,0 +1,6 @@
+ipywidgets
+matplotlib
+netCDF4
+notebook
+numpy
+scipy
