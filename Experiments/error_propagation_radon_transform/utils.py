@@ -121,3 +121,131 @@ def compute_gradient(sinogram, theta, reconstruction_shape, filter_name, progres
         
     return jacobian, kidney_reconstructed
 
+def get_neigbours_y(p, n, height, width):
+    '''
+    Get the neighbouring indices of the pixel p along the y-axis within 
+    distance n.
+
+    Parameter
+    ---------
+    p: [int]
+        Index of the target pixel.
+    n: int
+        Distance at whitch the neighbours are considered.
+    height: int
+        Height of the grid.
+    width: int
+        Width of the grid.
+
+    Return
+    ------
+    [int]
+        A list of neighbouring indices in ascending order.
+    '''
+
+    assert p >= 0, 'The index of the pixel should be poitive or zero' 
+    assert (height > 0 or width > 0), 'The height and width should be positive numbers'
+
+    if n < 1:
+        return []
+
+    neighbours = []
+    # move upwards
+    for i in range(1, n+1):
+        if p - i * width < 0:
+            break
+        neighbours.append(p - i * width)
+
+    # ensure ascending order
+    neighbours.reverse()
+
+    # move downwards
+    for i in range(1, n+1):
+        if p + i * width >= width*height:
+            break
+        neighbours.append(p + i * width)
+
+    return neighbours
+
+def get_neigbours_x(p, n, height, width):
+    '''
+    Get the neighbouring indices of the pixel p along the x-axis within 
+    distance n.
+
+    Parameter
+    ---------
+    p: [int]
+        Index of the target pixel.
+    n: int
+        Distance at whitch the neighbours are considered.
+    height: int
+        Height of the grid.
+    width: int
+        Width of the grid.
+
+    Return
+    ------
+    [int]
+        A list of neighbouring indices in ascending order.
+    '''
+
+    assert p >= 0, 'The index of the pixel should be poitive or zero' 
+    assert (height > 0 or width > 0), 'The height and width should be positive numbers'
+
+    if n < 1:
+        return []
+
+    neighbours = []
+    # move left
+    for i in range(1, n+1):
+        if p - i < 0:
+            break
+        neighbours.append(p - i)
+
+    # ensure ascending order
+    neighbours.reverse()
+
+    # move right
+    for i in range(1, n+1):
+        if p + i >= width:
+            break
+        neighbours.append(p + i)
+
+    return neighbours
+
+def build_covariance_y(variance, function, width=3):
+    '''
+    Generate a covariance matrix, which covariance is along the 
+    y-dimension of a grid.
+
+    Parameter
+    ---------
+    variance: array_like
+        A 2D array of variances for each pixel.
+    '''
+    
+    im_height, im_width = variance.shape
+    n = im_height * im_width
+    var = np.diagflat(variance.flatten())
+    
+    for p in range(n):
+        idy = get_neigbours_y(p, width, im_height, im_width)
+        
+        omega = np.arange(0,width+1)
+        rho = function(omega, 1/np.log(width+1))
+        
+        top = 1
+        bottom = min(width, p//im_width)
+        for idx in idy:
+            if p < idx:
+                # bottom
+                #var[p,idx] = np.sqrt(var[p,p]) * np.sqrt(var[idx,idx]) * rho[top]
+                var[idx,p] = np.sqrt(var[p,p]) * np.sqrt(var[idx,idx]) * rho[top]
+                top += 1
+            if p > idx:
+            #    # top
+                var[idx,p] = np.sqrt(var[p,p]) * np.sqrt(var[idx,idx]) * rho[bottom]
+            #    var[p,idx] = np.sqrt(var[p,p]) * np.sqrt(var[idx,idx]) * bottom
+                bottom -= 1
+            
+    return var
