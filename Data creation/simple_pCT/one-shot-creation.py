@@ -13,6 +13,7 @@ from skimage import transform
 import tensorflow as tf
 from error_propagation_radon_transform import utils
 
+import argparse
 import sys
 import logging
 logger = logging.getLogger(__name__)
@@ -153,7 +154,7 @@ def calcWEPL(RSP, MLP):
     return wepl
 
 
-def reconstruct(wepl, num_angle, filter_name='ramp', circle=False):
+def reconstruct(wepl, num_angle, filter_name='ramp', circle=True):
     theta = np.linspace(0., 180., num_angle, endpoint=False)
 
     reconstructed = transform.iradon(wepl, theta=theta, filter_name=filter_name, circle=circle)
@@ -165,6 +166,7 @@ def derivate(wepl, num_angle, filter_name='ramp'):
     reconstruction_shape = (wepl.shape[0], wepl.shape[0])
     jacobian, reconstructed = utils.compute_gradient(wepl, theta, reconstruction_shape, filter_name)
 
+    return jacobian, reconstructed
 
 def exponential(value, gamma):
     return np.exp( - gamma * value)
@@ -207,14 +209,14 @@ def main(num_angle=179, num_offset=1, num_spotx=190, chord_length=True, filter_n
     x, RSP_shape = loadRSP(scale=1)
 
     # settings
-    num_angle = 179
-    num_offset = 1
-    num_spotx = 180 # 180 -> Out of memory
-    chord_length = True
-    filter_name='ramp'
+    # num_angle = 179 * 7 // 8
+    # num_offset = 1
+    # num_spotx = 130 # 180 -> Out of memory
+    # chord_length = True
+    # filter_name='ramp'
     width = 10
 
-    max_workers = 90
+    max_workers = 16
 
     chords = 'exact' if chord_length else 'map'
 
@@ -284,6 +286,14 @@ if __name__ == '__main__':
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
+    parser = argparse.ArgumentParser(description='Create MLPs, WEPLs, Jacobian, Reconstruction and Sigma in one shot.')
+    parser.add_argument('num_angle', default=178, type=int, help='Number of angles')
+    parser.add_argument('num_offset', default=1, type=int, help='Number of offsets')
+    parser.add_argument('num_spotx', default=130, type=int, help='Number of spotx')
+    parser.add_argument('filter_name', default='ramp', choices=['ramp', 'shepp-logan', 'cosine', 'hamming', 'hann'], help='Filter')
+
+    args = parser.parse_args()
+
     logger.info('Started')
-    main()
+    main(num_angle=args.num_angle, num_offset=args.num_offset, num_spotx=args.num_spotx, filter_name=args.filter_name)
     logger.info('Finished')
