@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 from scipy import sparse
 from skimage import transform
 from error_propagation_radon_transform import utils
@@ -70,21 +71,28 @@ def main(num_angle=179, num_offset=1, num_spotx=190, chord_length=True, filter_n
     logger.info('Loading jacobian.')
     jacobian = np.load('../../Data/simple_pCT/Jacobian/J_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}_{:d}_{:d}.npy'.format(num_angle, num_offset, num_spotx, chords, filter_name, RSP_shape[0], RSP_shape[1]))
     l,m,n,o = jacobian.shape
-    jacobian_reshaped = np.reshape(jacobian, (l*m, n*o))
+    jacobian_reshaped = tf.reshape(jacobian, (l*m, n*o))
 
-    variance_out = np.empty((num_spotx,num_spotx,rsp.shape[2]))
+    steps = 8
+
+    variance_out = np.empty((num_spotx,num_spotx,rsp.shape[2]//steps))
     logger.info('Start error propagation...')
-    for z in range(rsp.shape[2]):
+    for z in range(0,rsp.shape[2],steps):
+        logger.info('Start iteration {:d} of {:d} ...'.format(z, rsp.shape[2]//steps))
         x, _ = sliceRSP(rsp, z)
+        logger.info('Calculate WEPL...')
         wepl = calcWEPL(x, MLP_angles_offsets_spotx)
         wepl = np.reshape(wepl, (num_spotx, num_angle))
 
+        logger.info('Calculate Std...')
         std = createStd(wepl, num_spotx)
 
+        logger.info('Build Covariance...')
         Sigma_in = utils.build_covariance_y(std**2, function=exponential, width=width)
 
+        logger.info('Propagate error...')
         Sigma_out = jacobian_reshaped @ Sigma_in @ np.transpose(jacobian_reshaped)
-        variance_out[:,:,z] = np.abs(np.diag(Sigma_out).reshape(num_spotx,num_spotx))
+        variance_out[:,:,z] = tf.reshape(tf.abs(tf.linalg.tensor_diag_part(Sigma_out)), (num_spotx,num_spotx))
 
         # if not os.path.exists('../../Data/simple_pCT/Sigma/{:d}'.format(num_angle)):
         #     os.makedirs('../../Data/simple_pCT/Sigma/{:d}'.format(num_angle))
