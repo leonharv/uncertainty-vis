@@ -3,6 +3,7 @@ import tensorflow as tf
 from scipy import sparse
 from scipy.interpolate import CubicSpline
 from skimage import transform
+from skimage.transform import resize
 from error_propagation_radon_transform import utils
 
 import concurrent.futures
@@ -13,12 +14,16 @@ import os
 import logging
 logger = logging.getLogger(__name__)
 
-def sliceRSP(rsp, z=0, scale=1):
+def sliceRSP(rsp, z=0, scale=1, target_shape=None):
     phantom = np.pad(rsp[:,:,z], ((30*scale,30*scale), (100*scale, 100*scale)))
     RSP_shape = phantom.shape[:2]
+
+    if target_shape:
+        phantom = resize( phantom, target_shape, anti_aliasing=True )
+
     return phantom, RSP_shape
 
-def get_mlp(spline, phi, spotx=0, shape=(130, 1026), chord_length=True):
+def get_mlp(spline, phi, shape=(130, 1026), chord_length=True):
     '''
     Generate a MLP.
     '''
@@ -60,11 +65,11 @@ def get_mlp(spline, phi, spotx=0, shape=(130, 1026), chord_length=True):
     else:
         return MLP_prototype
     
-def worker_spotx_future(idx, cs, phi, spotx, target_shape, chord_length):
+def worker_spotx_future(cs, phi, target_shape, chord_length):
     '''
     Worker function for concurrent executions
     '''
-    return get_mlp(cs, phi, spotx, shape=target_shape, chord_length=chord_length).reshape((1,-1))
+    return get_mlp(cs, phi, shape=target_shape, chord_length=chord_length).reshape((1,-1))
 
 def bulkMLP_concurrent(num_angle, num_offset, num_spotx, chord_length, target_shape, max_workers=32):
     '''
@@ -122,7 +127,7 @@ def bulkMLP_concurrent(num_angle, num_offset, num_spotx, chord_length, target_sh
                 for adx,phi in enumerate(angles):
                     idx = odx * len(angles)*len(offsets) + xdx * len(angles) + adx
 
-                    future = executor.submit(worker_spotx_future, idx, cs, phi, spotx, target_shape, chord_length)
+                    future = executor.submit(worker_spotx_future, cs, phi, target_shape, chord_length)
                     future_to_idx[future] = idx
                 
     for future in concurrent.futures.as_completed(future_to_idx):
@@ -154,39 +159,36 @@ def calcWEPL(RSP, MLP):
 def exponential(value, gamma):
     return np.exp( - gamma * value)
 
-def main(num_angle=179, num_offset=1, num_spotx=190, chord_length=True, filter_name='ramp'):
+def main(num_angle=179, num_offset=1, num_spotx=190, filter_name='ramp', chord_length=True, mlp_shape=(130, 130)):
     rsp = np.load('../../Data/simple_pCT/Phantoms/Head/RSP.npy')
-    _, RSP_shape = sliceRSP(rsp, 0)
 
     width = 10
     chords = 'exact' if chord_length else 'map'
     max_workers = 16
 
-    logger.info('''Parameters are:
-                num_angle = {:d}
-                num_offset = {:d}
-                num_spotx = {:d}
-                chord_length = {:s}
-                filter_name = {:s}'''.format(
-                    num_angle,
-                    num_offset,
-                    num_spotx,
-                    chords,
-                    filter_name
-                ))
+    logger.info(f'''Parameters are:
+                num_angle = {num_angle}
+                num_offset = {num_offset}
+                num_spotx = {num_spotx}
+                chord_length = {chords}
+                filter_name = {filter_name}
+                mlp_shape = {mlp_shape}''')
     
-    logger.info('Start generating MLPs...')
-    MLP_angles_offsets_spotx = bulkMLP_concurrent(num_angle, num_offset, num_spotx, chord_length, RSP_shape, max_workers)
-    logger.info('Finished generating MLPs.')
+    # logger.info('Start generating MLPs...')
+    # MLP_angles_offsets_spotx = bulkMLP_concurrent(num_angle, num_offset, num_spotx, chord_length, mlp_shape, max_workers)
+    # logger.info('Finished generating MLPs.')
 
-    logger.info('Saving MLPs.')
-    if chord_length:
-        sparse.save_npz('../../Data/simple_pCT/MLP/MLP_angles{:d}_offset{:d}_spotx{:d}_exact_{:d}_{:d}.npz'.format(num_angle, num_offset, num_spotx, RSP_shape[0], RSP_shape[1]), MLP_angles_offsets_spotx.tocsc())
-    else:
-        sparse.save_npz('MLP_angles{:d}_offset{:d}_spotx{:d}_map_{:d}_{:d}.npz'.format(num_angle, num_offset, num_spotx, RSP_shape[0], RSP_shape[1]), MLP_angles_offsets_spotx.tocsc())
+    # logger.info('Saving MLPs.')
+    # if chord_length:
+    #     sparse.save_npz('../../Data/simple_pCT/MLP/MLP_angles{:d}_offset{:d}_spotx{:d}_exact_{:d}_{:d}.npz'.format(num_angle, num_offset, num_spotx, mlp_shape[0], mlp_shape[1]), MLP_angles_offsets_spotx.tocsc())
+    # else:
+    #     sparse.save_npz('../../Data/simple_pCT/MLP/MLP_angles{:d}_offset{:d}_spotx{:d}_map_{:d}_{:d}.npz'.format(num_angle, num_offset, num_spotx, mlp_shape[0], mlp_shape[1]), MLP_angles_offsets_spotx.tocsc())
 
-    logger.info('Loading jacobian.')
-    jacobian = np.load('../../Data/simple_pCT/Jacobian/J_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}_{:d}_{:d}.npy'.format(num_angle, num_offset, num_spotx, chords, filter_name, RSP_shape[0], RSP_shape[1]))
+    logger.info('Loading MLPs.')
+    MLP_angles_offsets_spotx = sparse.load_npz(f'../../Data/simple_pCT/MLP/MLP_angles{num_angle}_offset{num_offset}_spotx{num_spotx}_{chords}_{mlp_shape[0]}_{mlp_shape[1]}.npz')
+
+    logger.info('Loading jacobian...')
+    jacobian = np.load('../../Data/simple_pCT/FBP Comparison/Jacobian/J_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}_{:d}_{:d}.npy'.format(num_angle, 1, num_spotx, 'exact', filter_name, 190, 1226))
     l,m,n,o = jacobian.shape
     jacobian_reshaped = tf.reshape(jacobian, (l*m, n*o))
 
@@ -196,9 +198,9 @@ def main(num_angle=179, num_offset=1, num_spotx=190, chord_length=True, filter_n
     reconstructed = np.empty((num_spotx,num_spotx,rsp.shape[2]//steps))
     variance_out = np.empty((num_spotx,num_spotx,rsp.shape[2]//steps))
     logger.info('Start pipeline...')
-    for z in range(0,rsp.shape[2],steps):
-        logger.info('Start iteration {:d} of {:d} ...'.format(z//steps, rsp.shape[2]//steps))
-        x, _ = sliceRSP(rsp, z)
+    for z in range(0,rsp.shape[2]//steps):
+        logger.info('Start iteration {:d} of {:d} ...'.format(z, rsp.shape[2]//steps))
+        x, _ = sliceRSP(rsp, z*steps, 1, mlp_shape)
 
         logger.info('Randomize MLPs...')
         MLPs_randomized = randomizeMLPs(MLP_angles_offsets_spotx, num_angle, num_offset, num_spotx)
@@ -209,28 +211,23 @@ def main(num_angle=179, num_offset=1, num_spotx=190, chord_length=True, filter_n
 
         logger.info('Calculate Std...')
         wepl_mean = np.mean(wepl, axis=1)
-        wepl_std = np.std(wepl, axis=1)
+        wepl_var = np.var(wepl, axis=1)
 
         logger.info('Build Covariance...')
-        Sigma_in = utils.build_covariance_y(wepl_std**2, function=exponential, width=width)
+        Sigma_in = utils.build_covariance_y(wepl_var, function=exponential, width=width)
 
         logger.info('Propagate error...')
         Sigma_out = jacobian_reshaped @ Sigma_in @ np.transpose(jacobian_reshaped)
-        variance_out[:,:,z//steps] = tf.reshape(tf.abs(tf.linalg.tensor_diag_part(Sigma_out)), (num_spotx,num_spotx))
+        variance_out[:,:,z] = tf.reshape(tf.abs(tf.linalg.tensor_diag_part(Sigma_out)), (num_spotx,num_spotx))
 
         logger.info('Reconstruct...')
-        reconstructed[:,:,z//steps] = transform.iradon(wepl_mean, theta=theta, filter_name=filter_name, circle=True)
+        reconstructed[:,:,z] = transform.iradon(wepl_mean, theta=theta, filter_name=filter_name, circle=True)
 
-        # if not os.path.exists('../../Data/simple_pCT/Sigma/{:d}'.format(num_angle)):
-        #     os.makedirs('../../Data/simple_pCT/Sigma/{:d}'.format(num_angle))
-
-        # np.save('../../Data/simple_pCT/Sigma/{:d}/Sigma_raedler_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}_{:d}_{:d}_z{:d}.npy'.format(num_angle, num_angle, num_offset, num_spotx, chords, filter_name, RSP_shape[0], RSP_shape[1], z), Sigma_out)
-        
     logger.info('saving variance.')
-    np.save('../../Data/simple_pCT/Variance/Variance_raedler_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}_{:d}_{:d}.npy'.format(num_angle, num_offset, num_spotx, chords, filter_name, RSP_shape[0], RSP_shape[1]), variance_out)
+    np.save('../../Data/simple_pCT/Variance/Variance_ensemble_raedler_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}_{:d}_{:d}.npy'.format(num_angle, num_offset, num_spotx, chords, filter_name, mlp_shape[0], mlp_shape[1]), variance_out)
 
     logger.info('Saving reconstruction.')
-    np.save('../../Data/simple_pCT/Reconstruction/Head/{:d}_{:d}/3D/RSP_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}.npy'.format(RSP_shape[0], RSP_shape[1], num_angle, num_offset, num_spotx, chords, filter_name), reconstructed)
+    np.save('../../Data/simple_pCT/Reconstruction/Head/{:d}_{:d}/3D/RSP_ensemble_angles{:d}_offset{:d}_spotx{:d}_{:s}_{:s}.npy'.format(mlp_shape[0], mlp_shape[1], num_angle, 1, num_spotx, chords, filter_name), reconstructed)
 
     logger.info('Finished pipeline.')
 
@@ -244,13 +241,16 @@ if __name__ == '__main__':
     logger.addHandler(handler)
 
     parser = argparse.ArgumentParser(description='Create MLPs, WEPLs, Jacobian, Reconstruction and Sigma in one shot.')
-    parser.add_argument('num_angle', default=178, type=int, help='Number of angles')
-    parser.add_argument('num_offset', default=1, type=int, help='Number of offsets')
-    parser.add_argument('num_spotx', default=130, type=int, help='Number of spotx')
-    parser.add_argument('filter_name', default='ramp', choices=['ramp', 'shepp-logan', 'cosine', 'hamming', 'hann'], help='Filter')
+    parser.add_argument('--num_angle', default=178, type=int, help='Number of angles')
+    parser.add_argument('--num_offset', default=1, type=int, help='Number of offsets')
+    parser.add_argument('--num_spotx', default=130, type=int, help='Number of spotx')
+    parser.add_argument('--filter_name', default='ramp', choices=['ramp', 'shepp-logan', 'cosine', 'hamming', 'hann'], help='Filter')
+    parser.add_argument('--chord_length', action='store_true', help='The chord length will be used instead of storing a 1 in the MLP.')
+    parser.add_argument('--mlp_height', default=130, type=int, help='Height of the MLPs')
+    parser.add_argument('--mlp_width', default=130, type=int, help='Width of the MLPs')
 
     args = parser.parse_args()
 
     logger.info('Started')
-    main(num_angle=args.num_angle, num_offset=args.num_offset, num_spotx=args.num_spotx, filter_name=args.filter_name)
+    main(num_angle=args.num_angle, num_offset=args.num_offset, num_spotx=args.num_spotx, filter_name=args.filter_name, chord_length=args.chord_length, mlp_shape=(args.mlp_height, args.mlp_width))
     logger.info('Finished')
